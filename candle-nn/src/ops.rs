@@ -147,7 +147,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda",feature = "hip"))]
     fn cuda_fwd(
         &self,
         storage: &candle::CudaStorage,

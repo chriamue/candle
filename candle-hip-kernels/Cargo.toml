@@ -1,0 +1,17 @@
+[package]
+name = "candle-hip-kernels"
+version = "0.3.3"
+edition = "2021"
+
+description = "HIP kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[build-dependencies]
+glob = "0.3.1"
+num_cpus = "1.16.0"
+rayon = "1.8.0"

@@ -35,13 +35,14 @@ candle = { path = "./candle-core", package = "candle-core" }
 candle-datasets = { path = "./candle-datasets" }
 candle-flash-attn = { path = "./candle-flash-attn" }
 candle-kernels = { path = "./candle-kernels" }
+candle-hip-kernels = { path = "./candle-hip-kernels" }
 candle-metal-kernels = { path = "./candle-metal-kernels" }
 candle-nn = { path = "./candle-nn" }
 candle-onnx = { path = "./candle-onnx" }
 candle-transformers = { path = "./candle-transformers" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
-cudarc = { version = "0.10.0", features = ["f16"] }
+cudarc = { path = "../cudarc", features = ["f16"] }
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }

@@ -1,6 +1,9 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
+#[cfg(feature = "hip")]
+pub use candle_hip_kernels as kernels;
+#[cfg(feature = "cuda")]
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
@@ -186,6 +189,30 @@ impl CudaDevice {
         })
     }
 
+
+    #[cfg(feature = "hip")]
+    pub fn get_or_load_func(&self, module_name: &str, ptx: &'static [u8]) -> Result<CudaFunction> {
+        if !self.has_func(module_name, module_name) {
+            // Leaking the string here is a bit sad but we need a &'static str and this is only
+            // done once per kernel name.
+            let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
+            self.load_ptx(ptx.into(), module_name, &[static_module_name])
+                .map_err(|cuda| CudaError::Load {
+                    cuda,
+                    module_name: module_name.to_string(),
+                })
+                .w()?;
+        }
+        self.get_func(module_name, module_name)
+            // Clippy recommends this `ok_or` rather than `ok_or_else` so hopefully the compiler is
+            // able to only build the error value if needed.
+            .ok_or(CudaError::MissingKernel {
+                module_name: module_name.to_string(),
+            })
+            .w()
+    }
+
+    #[cfg(feature = "cuda")]
     pub fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
         if !self.has_func(module_name, module_name) {
             // Leaking the string here is a bit sad but we need a &'static str and this is only
@@ -1483,7 +1510,10 @@ fn gemm_config<T>(
     rhs_l: &Layout,
 ) -> Result<StridedBatchedConfig<T>> {
     // https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemm
+    #[cfg(feature = "cuda")]
     use cudarc::cublas::sys::cublasOperation_t;
+    #[cfg(feature = "hip")]
+    use cudarc::cublas::sys::hipblasOperation_t as cublasOperation_t;
 
     let lhs_stride = lhs_l.stride();
     let rhs_stride = rhs_l.stride();
@@ -1493,9 +1523,9 @@ fn gemm_config<T>(
     let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
     // The a tensor has dims batching, k, n (rhs)
     let (lda, transa) = if rhs_m1 == 1 && rhs_m2 == n {
-        (n as i32, cublasOperation_t::CUBLAS_OP_N)
+        (n as i32, cublasOperation_t::HIPBLAS_OP_N)
     } else if rhs_m1 == k && rhs_m2 == 1 {
-        (k as i32, cublasOperation_t::CUBLAS_OP_T)
+        (k as i32, cublasOperation_t::HIPBLAS_OP_T)
     } else {
         Err(CudaError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -1505,9 +1535,9 @@ fn gemm_config<T>(
     };
     // The b tensor has dims batching, m, k (lhs)
     let (ldb, transb) = if lhs_m1 == 1 && lhs_m2 == k {
-        (k as i32, cublasOperation_t::CUBLAS_OP_N)
+        (k as i32, cublasOperation_t::HIPBLAS_OP_N)
     } else if lhs_m1 == m && lhs_m2 == 1 {
-        (m as i32, cublasOperation_t::CUBLAS_OP_T)
+        (m as i32, cublasOperation_t::HIPBLAS_OP_T)
     } else {
         Err(CudaError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),

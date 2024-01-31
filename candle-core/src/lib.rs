@@ -41,7 +41,7 @@ mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cudarc")]
 pub mod cuda_backend;
 #[cfg(feature = "cudnn")]
 pub mod cudnn;
@@ -84,10 +84,10 @@ pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cudarc")]
 pub use cuda_backend::{CudaDevice, CudaStorage};
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cudarc"))]
 pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "metal")]

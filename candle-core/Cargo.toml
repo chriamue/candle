@@ -13,6 +13,7 @@ readme = "README.md"
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
+candle-hip-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 metal = { workspace = true, optional = true}
 cudarc = { workspace = true, optional = true }
@@ -39,7 +40,9 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels"]
+cudarc_backend = ["cudarc"]
+cuda = ["cudarc_backend", "dep:candle-kernels"]
+hip = ["cudarc_backend", "dep:candle-hip-kernels"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
