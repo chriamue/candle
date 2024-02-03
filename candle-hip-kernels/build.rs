@@ -318,7 +318,7 @@ impl Builder {
                         // .arg("--ptx")
                         // .args(["--default-stream", "per-thread"])
                         // .args(["--output-directory", &out_dir.display().to_string()])
-                        .args(["--genco","--offload-arch=gfx1030","-std=c++17", "-O3"])
+                        .args(["--genco","--offload-arch=gfx1102","-std=c++17", "-O3"])
                         .args(["-o", &output_filename.display().to_string()])
                         .args(&self.extra_args)
                         .args(&include_options);

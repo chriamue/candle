@@ -15,3 +15,6 @@ license = "MIT OR Apache-2.0"
 glob = "0.3.1"
 num_cpus = "1.16.0"
 rayon = "1.8.0"
+
+[dev-dependencies]
+candle-core = { path = "../candle-core", features = ["hip"] }

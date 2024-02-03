@@ -42,7 +42,7 @@ candle-onnx = { path = "./candle-onnx", version = "0.3.3" }
 candle-transformers = { path = "./candle-transformers", version = "0.3.3" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
-cudarc = { path = "../cudarc", features = ["f16"] }
+cudarc = { git = "https://github.com/vberthet/cudarc", features = ["f16"] }
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
