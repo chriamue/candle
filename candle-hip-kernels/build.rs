@@ -1,9 +1,12 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+
+use std::io;
 use rayon::prelude::*;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use regex::Regex;
 
 /// Error messages
 #[derive(Debug)]
@@ -314,11 +317,15 @@ impl Builder {
                     None
                 } else {
                     let mut command = std::process::Command::new("hipcc");
+                    // We get a list of all existing amd gpu arch newer than gfx900 (ie: arch compatible with rocm)
+                    let amd_arches = get_amdgpu_arch("gfx900");
+                    let offload_arch:Vec<_> =  amd_arches.into_iter().map(|arch| format!("--offload-arch={arch}")).collect();
                     command //.arg(format!("--gpu-architecture=sm_{compute_cap}"))
                         // .arg("--ptx")
                         // .args(["--default-stream", "per-thread"])
                         // .args(["--output-directory", &out_dir.display().to_string()])
-                        .args(["--genco","--offload-arch=gfx1030","-std=c++17", "-O3"])
+                        .args(["-O3","-std=c++17","-ffast-math","--cuda-device-only","--genco", "-include", "hip/hip_runtime.h", "-parallel-jobs=15"])
+                        .args(&offload_arch)
                         .args(["-o", &output_filename.display().to_string()])
                         .args(&self.extra_args)
                         .args(&include_options);
@@ -426,6 +433,34 @@ fn cuda_include_dir() -> Option<PathBuf> {
         .chain(roots)
         .find(|path| path.join("include").join("hip").join("hip_common.h").is_file())
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Extract available amd gpu arch using llvm
+// See Orochi project file https://github.com/GPUOpen-LibrariesAndSDKs/Orochi/blob/65de35c89c3f4dab8156ff7e5df774b7a8aa9bb6/scripts/kernelCompile.py#L9
+
+/// Convert amd gpu arch to a number
+fn amdgpu_arch_to_num(arch: &str) -> usize {
+    let min_arch = &arch[3..];
+    usize::from_str_radix(min_arch,16).expect("min_arch is not a valid amd arch (eg gfx1030)")
+}
+
+/// Extract available amd gpu arch using llc command from llvm
+fn get_amdgpu_arch(min_arch: &str) -> Vec<String> {
+    let min_arch = amdgpu_arch_to_num(min_arch);
+    let mut command = std::process::Command::new("llc");
+    command
+        .args(["-march=amdgcn","-mcpu=help"]);
+    let output = command.output().expect("Cannot start llc, is llvm installed ?");
+    let output = String::from_utf8(output.stdout).unwrap();
+
+    let regex = Regex::new(r"(?m)\s+(gfx[0-9a-f]+).*processor.").unwrap();
+
+    regex.captures_iter(&output).map(|c| c.extract()).map(|(_,[arch])| {
+        arch.to_string()
+    }).filter(|arch| amdgpu_arch_to_num(arch) >= min_arch).collect()
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // fn compute_cap() -> Result<usize, Error> {
 //     println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
