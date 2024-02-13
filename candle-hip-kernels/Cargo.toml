@@ -1,6 +1,6 @@
 [package]
 name = "candle-hip-kernels"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 
 description = "HIP kernels for Candle"
@@ -10,8 +10,10 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+regex = "1.10.3"
 
 [build-dependencies]
 glob = "0.3.1"
 num_cpus = "1.16.0"
 rayon = "1.8.0"
+regex = "1.10.3"

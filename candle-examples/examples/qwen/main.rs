@@ -5,9 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
-use candle_transformers::models::yi::{Config, Model};
+use candle_transformers::models::qwen2::{Config, Model};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -15,14 +15,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
-enum Which {
-    #[value(name = "6b")]
-    L6b,
-    #[value(name = "34b")]
-    L34b,
-}
 
 struct TextGeneration {
     model: Model,
@@ -104,7 +96,6 @@ impl TextGeneration {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
-                let t = t.replace("<|im_end|>", "\n");
                 print!("{t}");
                 std::io::stdout().flush()?;
             }
@@ -122,6 +113,22 @@ impl TextGeneration {
     }
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+enum WhichModel {
+    #[value(name = "0.5b")]
+    W0_5b,
+    #[value(name = "1.8b")]
+    W1_8b,
+    #[value(name = "4b")]
+    W4b,
+    #[value(name = "7b")]
+    W7b,
+    #[value(name = "14b")]
+    W14b,
+    #[value(name = "72b")]
+    W72b,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -132,6 +139,9 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    #[arg(long)]
+    use_flash_attn: bool,
 
     #[arg(long)]
     prompt: String,
@@ -149,11 +159,11 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
-    #[arg(long, default_value = "01-ai/Yi-6B")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long, default_value = "main")]
     revision: String,
@@ -172,9 +182,8 @@ struct Args {
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 
-    /// The model size to use.
-    #[arg(long, default_value = "6b")]
-    which: Which,
+    #[arg(long, default_value = "0.5b")]
+    model: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -205,8 +214,22 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
+    let model_id = match args.model_id {
+        Some(model_id) => model_id,
+        None => {
+            let size = match args.model {
+                WhichModel::W0_5b => "0.5B",
+                WhichModel::W1_8b => "1.8B",
+                WhichModel::W4b => "4B",
+                WhichModel::W7b => "7B",
+                WhichModel::W14b => "14B",
+                WhichModel::W72b => "72B",
+            };
+            format!("Qwen/Qwen1.5-{size}")
+        }
+    };
     let repo = api.repo(Repo::with_revision(
-        args.model_id,
+        model_id,
         RepoType::Model,
         args.revision,
     ));
@@ -219,16 +242,19 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => match args.model {
+            WhichModel::W0_5b | WhichModel::W1_8b => vec![repo.get("model.safetensors")?],
+            WhichModel::W4b | WhichModel::W7b | WhichModel::W14b | WhichModel::W72b => {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
+        },
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = match args.which {
-        Which::L6b => Config::config_6b(),
-        Which::L34b => Config::config_34b(),
-    };
+    let config_file = repo.get("config.json")?;
+    let config: Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16

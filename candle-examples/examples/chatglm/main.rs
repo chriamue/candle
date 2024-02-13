@@ -5,32 +5,24 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
-use candle_transformers::models::yi::{Config, Model};
+use candle_transformers::models::chatglm::{Config, Model};
 
 use candle::{DType, Device, Tensor};
-use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
-enum Which {
-    #[value(name = "6b")]
-    L6b,
-    #[value(name = "34b")]
-    L34b,
-}
-
 struct TextGeneration {
     model: Model,
     device: Device,
-    tokenizer: TokenOutputStream,
+    tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    verbose_prompt: bool,
 }
 
 impl TextGeneration {
@@ -43,49 +35,49 @@ impl TextGeneration {
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
+        verbose_prompt: bool,
         device: &Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
-            tokenizer: TokenOutputStream::new(tokenizer),
+            tokenizer,
             logits_processor,
             repeat_penalty,
             repeat_last_n,
+            verbose_prompt,
             device: device.clone(),
         }
     }
 
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
-        self.tokenizer.clear();
-        let mut tokens = self
-            .tokenizer
-            .tokenizer()
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
-        for &t in tokens.iter() {
-            if let Some(t) = self.tokenizer.next_token(t)? {
-                print!("{t}")
+        println!("starting the inference loop");
+        let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
+        if tokens.is_empty() {
+            anyhow::bail!("Empty prompts are not supported in the chatglm model.")
+        }
+        if self.verbose_prompt {
+            for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
+                let token = token.replace('▁', " ").replace("<0x0A>", "\n");
+                println!("{id:7} -> '{token}'");
             }
         }
-        std::io::stdout().flush()?;
-
+        let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the <|endoftext|> token"),
+        let eos_token = match self.tokenizer.get_vocab(true).get("</s>") {
+            Some(token) => *token,
+            None => anyhow::bail!("cannot find the endoftext token"),
         };
+        print!("{prompt}");
+        std::io::stdout().flush()?;
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
+            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = self.model.forward(&input)?;
+            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
@@ -103,17 +95,11 @@ impl TextGeneration {
             if next_token == eos_token {
                 break;
             }
-            if let Some(t) = self.tokenizer.next_token(next_token)? {
-                let t = t.replace("<|im_end|>", "\n");
-                print!("{t}");
-                std::io::stdout().flush()?;
-            }
+            let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
+            print!("{token}");
+            std::io::stdout().flush()?;
         }
         let dt = start_gen.elapsed();
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
-            print!("{rest}");
-        }
-        std::io::stdout().flush()?;
         println!(
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
@@ -133,6 +119,10 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
+    /// Display the token for the specified prompt.
+    #[arg(long)]
+    verbose_prompt: bool,
+
     #[arg(long)]
     prompt: String,
 
@@ -149,20 +139,20 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 5000)]
     sample_len: usize,
 
-    #[arg(long, default_value = "01-ai/Yi-6B")]
-    model_id: String,
-
-    #[arg(long, default_value = "main")]
-    revision: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long)]
-    tokenizer_file: Option<String>,
+    revision: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    weight_file: Option<String>,
+
+    #[arg(long)]
+    tokenizer: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -171,10 +161,6 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
-
-    /// The model size to use.
-    #[arg(long, default_value = "6b")]
-    which: Which,
 }
 
 fn main() -> Result<()> {
@@ -205,37 +191,32 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
-    let tokenizer_filename = match args.tokenizer_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+    let model_id = match args.model_id {
+        Some(model_id) => model_id.to_string(),
+        None => "THUDM/chatglm3-6b".to_string(),
     };
-    let filenames = match args.weight_files {
-        Some(files) => files
-            .split(',')
-            .map(std::path::PathBuf::from)
-            .collect::<Vec<_>>(),
+    let revision = match args.revision {
+        Some(rev) => rev.to_string(),
+        None => "main".to_string(),
+    };
+    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let tokenizer_filename = match args.tokenizer {
+        Some(file) => std::path::PathBuf::from(file),
+        None => api
+            .model("lmz/candle-chatglm".to_string())
+            .get("chatglm-tokenizer.json")?,
+    };
+    let filenames = match args.weight_file {
+        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
         None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = match args.which {
-        Which::L6b => Config::config_6b(),
-        Which::L34b => Config::config_34b(),
-    };
+    let config = Config::glm3_6b();
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
-    };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
     let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
@@ -248,6 +229,7 @@ fn main() -> Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
+        args.verbose_prompt,
         &device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
