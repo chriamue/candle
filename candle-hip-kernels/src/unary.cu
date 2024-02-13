@@ -83,10 +83,9 @@ extern "C" __global__ void FN_NAME( \
     } \
 } \
 
-
-#if __CUDA_ARCH__ >= 800
 UNARY_OP(hip_bfloat16, ucopy_bf16, x)
 UNARY_OP(hip_bfloat16, uneg_bf16, -x)
+#if __CUDA_ARCH__ >= 800
 UNARY_OP(hip_bfloat16, urecip_bf16, recipg(x))
 UNARY_OP(hip_bfloat16, uexp_bf16, expg(x))
 UNARY_OP(hip_bfloat16, ulog_bf16, logg(x))
